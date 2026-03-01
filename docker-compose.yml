@@ -1,5 +1,6 @@
 services:
   mailWrapper:
+    container_name: mail-wrapper
     build: .
     restart: unless-stopped
     ports:
