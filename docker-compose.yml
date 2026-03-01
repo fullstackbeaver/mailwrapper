@@ -1,5 +1,5 @@
 services:
-  mailWrapper:
+  mail-wrapper:
     container_name: mail-wrapper
     build: .
     restart: unless-stopped
