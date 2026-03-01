@@ -375,6 +375,114 @@ async fn run_idle(acc: &AccountConfig, account_name: &str, webhook_url: &str) ->
     Ok(())
 }
 
+// ─── Search handler ────────────────────────────────────────────────────────
+//
+// GET /accounts/:account/emails/search?from=addr@example.com&since=2026-01-15&folder=INBOX
+//
+// `from` et `since` sont optionnels mais au moins un doit être fourni.
+// `since` attend le format YYYY-MM-DD.
+
+async fn search_emails(
+    State(cfg): State<Arc<Config>>,
+    Path(account): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let acc = get_account(&cfg, &account)?;
+    let folder = params.get("folder").cloned().unwrap_or_else(|| "INBOX".to_string());
+    let from_addr = params.get("from").cloned();
+    let since_date = params.get("since").cloned();
+
+    if from_addr.is_none() && since_date.is_none() {
+        return Err(bad_request("At least one of 'from' or 'since' query params is required"));
+    }
+
+    // Construit la requête IMAP SEARCH
+    // ex: SINCE 15-Jan-2026 FROM addr@example.com
+    let mut criteria = String::new();
+
+    if let Some(ref since) = since_date {
+        // Convertit YYYY-MM-DD → DD-Mon-YYYY (format IMAP)
+        let imap_date = parse_imap_date(since)
+            .map_err(|_| bad_request("Invalid 'since' format, expected YYYY-MM-DD"))?;
+        criteria.push_str(&format!("SINCE {}", imap_date));
+    }
+
+    if let Some(ref from) = from_addr {
+        if !criteria.is_empty() { criteria.push(' '); }
+        criteria.push_str(&format!("FROM \"{}\"", from));
+    }
+
+    let mut session = imap_session(acc).await.map_err(imap_err)?;
+    session.select(&folder).await.map_err(imap_err)?;
+
+    let uids = session.uid_search(&criteria).await.map_err(imap_err)?;
+
+    if uids.is_empty() {
+        session.logout().await.ok();
+        return Ok(Json(json!({
+            "account": account,
+            "folder": folder,
+            "criteria": criteria,
+            "emails": []
+        })));
+    }
+
+    // Fetch les enveloppes des UIDs trouvés
+    let uid_list = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+    let messages = session
+        .uid_fetch(&uid_list, "(UID FLAGS ENVELOPE)")
+        .await
+        .map_err(imap_err)?;
+
+    let emails: Vec<EmailSummary> = messages.iter().filter_map(|m| {
+        let uid = m.uid?;
+        let envelope = m.envelope()?;
+        let seen = m.flags().iter().any(|f| matches!(f, async_imap::types::Flag::Seen));
+
+        let from = envelope.from.as_ref()?.first().map(|a| {
+            let name = a.name.as_ref().and_then(|n| std::str::from_utf8(n).ok()).unwrap_or("");
+            let mailbox = a.mailbox.as_ref().and_then(|m| std::str::from_utf8(m).ok()).unwrap_or("");
+            let host = a.host.as_ref().and_then(|h| std::str::from_utf8(h).ok()).unwrap_or("");
+            if name.is_empty() { format!("{}@{}", mailbox, host) }
+            else { format!("{} <{}@{}>", name, mailbox, host) }
+        }).unwrap_or_default();
+
+        let subject = envelope.subject.as_ref()
+            .and_then(|s| std::str::from_utf8(s).ok())
+            .unwrap_or("(no subject)").to_string();
+
+        let date = envelope.date.as_ref()
+            .and_then(|d| std::str::from_utf8(d).ok())
+            .unwrap_or("").to_string();
+
+        Some(EmailSummary { uid, from, subject, date, seen })
+    }).collect();
+
+    session.logout().await.ok();
+    Ok(Json(json!({
+        "account": account,
+        "folder": folder,
+        "criteria": criteria,
+        "count": emails.len(),
+        "emails": emails
+    })))
+}
+
+/// Convertit "2026-01-15" → "15-Jan-2026" (format attendu par IMAP SEARCH SINCE)
+fn parse_imap_date(date: &str) -> Result<String> {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() != 3 { anyhow::bail!("invalid date"); }
+
+    let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    let month_idx: usize = parts[1].parse::<usize>()
+        .map_err(|_| anyhow::anyhow!("invalid month"))?
+        .checked_sub(1)
+        .ok_or_else(|| anyhow::anyhow!("month out of range"))?;
+    let month = months.get(month_idx).ok_or_else(|| anyhow::anyhow!("month out of range"))?;
+
+    Ok(format!("{}-{}-{}", parts[2].trim_start_matches('0').replace("", "").trim(), month, parts[0]))
+}
+
 // ─── Error helpers ─────────────────────────────────────────────────────────
 
 fn imap_err<E: std::fmt::Display>(e: E) -> (StatusCode, Json<Value>) {
@@ -405,6 +513,7 @@ async fn main() -> Result<()> {
         .route("/accounts", get(list_accounts))
         .route("/accounts/:account/folders", get(list_folders))
         .route("/accounts/:account/emails", get(fetch_emails))
+        .route("/accounts/:account/emails/search", get(search_emails))
         .route("/accounts/:account/emails/send", post(send_email))
         .route("/accounts/:account/emails/:uid/move", post(move_email))
         .route("/accounts/:account/emails/:uid/labels", post(add_labels))

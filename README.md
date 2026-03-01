@@ -56,6 +56,26 @@ POST /emails/{uid}/labels?folder=INBOX
 DELETE /emails/{uid}?folder=INBOX
 ```
 
+### Récupérer des emails depuis une date
+```
+GET /accounts/perso/emails/search?from=contact@example.com&since=2026-02-01&folder=INBOX
+```
+
+Les paramètres sont tous optionnels mais au moins un est requis. Tu peux les combiner ou les utiliser séparément :
+
+```
+#### Tous les emails d'une adresse depuis une date
+?from=boss@company.com&since=2026-02-15
+
+#### Tous les emails depuis une date (tous expéditeurs)
+?since=2026-02-15
+
+#### Tous les emails d'une adresse (sans limite de date)
+?from=newsletter@example.com
+```
+
+La réponse inclut un champ `count` et `criteria`.
+
 ---
 
 ## IMAP IDLE
