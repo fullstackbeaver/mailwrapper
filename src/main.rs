@@ -1,7 +1,6 @@
 use anyhow::Result;
 use async_imap::extensions::idle::IdleResponse;
 use async_imap::{Client, Session};
-use async_native_tls::TlsConnector;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -13,11 +12,13 @@ use axum::{
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
+use native_tls::TlsConnector;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio_native_tls::TlsStream;
 use tracing::{error, info, warn};
 
 // ─── Config ────────────────────────────────────────────────────────────────
@@ -119,9 +120,11 @@ fn load_config() -> Result<Config> {
 
 // ─── IMAP helpers ──────────────────────────────────────────────────────────
 
-async fn imap_session(acc: &AccountConfig) -> Result<Session<async_native_tls::TlsStream<TcpStream>>> {
+async fn imap_session(acc: &AccountConfig) -> Result<Session<TlsStream<TcpStream>>> {
     let tcp = TcpStream::connect(format!("{}:{}", acc.imap_host, acc.imap_port)).await?;
-    let tls = TlsConnector::new().connect(&acc.imap_host, tcp).await?;
+    let tls_connector = TlsConnector::builder().build()?;
+    let tls_connector = tokio_native_tls::TlsConnector::from(tls_connector);
+    let tls = tls_connector.connect(&acc.imap_host, tcp).await?;
     let client = Client::new(tls);
     let session = client
         .login(&acc.login, &acc.password)
