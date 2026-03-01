@@ -6,11 +6,3 @@ services:
       - "8025:8025"
     env_file:
       - .env
-    networks:
-      beaverflow:
-        aliases:
-          - mailWrapper
-
-networks:
-  beaverflow:
-    external: true
