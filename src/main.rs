@@ -27,6 +27,7 @@ struct Config {
     api: ApiConfig,
     accounts: HashMap<String, AccountConfig>,
     webhook_url: Option<String>,
+    webhook_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +68,7 @@ fn load_config() -> Result<Config> {
         .map_err(|_| anyhow::anyhow!("API_TOKEN environment variable is required"))?;
 
     let webhook_url = std::env::var("WEBHOOK_URL").ok();
+    let webhook_token = std::env::var("WEBHOOK_TOKEN").ok();
 
     // Scan toutes les variables ACCOUNT_*_LOGIN pour découvrir les comptes
     let mut accounts: HashMap<String, AccountConfig> = HashMap::new();
@@ -111,6 +113,7 @@ fn load_config() -> Result<Config> {
         api: ApiConfig { port: api_port, token: api_token },
         accounts,
         webhook_url,
+        webhook_token,
     })
 }
 
@@ -337,10 +340,11 @@ async fn start_idle_watchers(cfg: Arc<Config>) {
         let acc = acc.clone();
         let name = name.clone();
         let url = webhook_url.clone();
+        let token = cfg.webhook_token.clone();
         tokio::spawn(async move {
             info!("IDLE watcher started for account '{}'", name);
             loop {
-                match run_idle(&acc, &name, &url).await {
+                match run_idle(&acc, &name, &url, token.as_deref()).await {
                     Ok(_) => info!("IDLE session ended for '{}', reconnecting...", name),
                     Err(e) => {
                         error!("IDLE error for '{}': {}, reconnecting in 5s...", name, e);
@@ -352,7 +356,7 @@ async fn start_idle_watchers(cfg: Arc<Config>) {
     }
 }
 
-async fn run_idle(acc: &AccountConfig, account_name: &str, webhook_url: &str) -> Result<()> {
+async fn run_idle(acc: &AccountConfig, account_name: &str, webhook_url: &str, webhook_token: Option<&str>) -> Result<()> {
     let mut session = imap_session(acc).await?;
     session.select("INBOX").await?;
 
@@ -364,11 +368,15 @@ async fn run_idle(acc: &AccountConfig, account_name: &str, webhook_url: &str) ->
     if matches!(idle_response, IdleResponse::NewData(_)) {
         info!("New email on '{}', triggering webhook", account_name);
         let client = reqwest::Client::new();
-        let _ = client
+        let mut req = client
             .post(webhook_url)
-            .json(&json!({ "event": "new_email", "account": account_name, "folder": "INBOX" }))
-            .send()
-            .await;
+            .json(&json!({ "event": "new_email", "account": account_name, "folder": "INBOX" }));
+
+        if let Some(token) = webhook_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let _ = req.send().await;
     }
 
     session.logout().await.ok();
