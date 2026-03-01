@@ -1,4 +1,4 @@
-# mailbridge
+# mailWrapper
 
 Wrapper HTTP léger (Rust/axum) pour IMAP/SMTP — conçu pour être appelé depuis Windmill.
 
@@ -60,7 +60,7 @@ DELETE /emails/{uid}?folder=INBOX
 
 ## IMAP IDLE
 
-Si `[webhook]` est configuré dans `config.toml`, mailbridge surveille INBOX en temps réel et envoie un `POST` au webhook Windmill à chaque nouvel email :
+Si `[webhook]` est configuré dans `config.toml`, mailWrapper surveille INBOX en temps réel et envoie un `POST` au webhook Windmill à chaque nouvel email :
 
 ```json
 { "event": "new_email", "folder": "INBOX" }
@@ -68,10 +68,11 @@ Si `[webhook]` est configuré dans `config.toml`, mailbridge surveille INBOX en 
 
 ## Démarrage
 
-```bash
-# Copier et adapter la config
-cp config.toml.example config.toml
+1. modifier le `.env` avec vos informations d'authentification
 
+1. lancer docker-compose pour démarrer mailWrapper :
+
+```bash
 # Lancer
 docker compose up -d
 ```
