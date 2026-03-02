@@ -20,6 +20,7 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_native_tls::TlsStream;
 use tracing::{error, info, warn};
+use futures_util::stream::TryStreamExt;
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -198,7 +199,10 @@ async fn list_folders(
     let acc = get_account(&cfg, &account)?;
     let mut session = imap_session(acc).await.map_err(imap_err)?;
     let folders = session.list(Some(""), Some("*")).await.map_err(imap_err)?;
-    let names: Vec<String> = folders.iter().map(|f| f.name().to_string()).collect();
+    // Convertir le stream en vector
+    use futures_util::stream::TryStreamExt;
+    let folders_vec: Vec<_> = folders.try_collect().await.map_err(imap_err)?;
+    let names: Vec<String> = folders_vec.iter().map(|f| f.name().to_string()).collect();
     session.logout().await.ok();
     Ok(Json(json!({ "account": account, "folders": names })))
 }
@@ -220,7 +224,10 @@ async fn fetch_emails(
         .await
         .map_err(imap_err)?;
 
-    let emails: Vec<EmailSummary> = messages.iter().filter_map(|m| {
+    // Convertir le stream en vector
+    let messages_vec: Vec<_> = messages.try_collect().await.map_err(imap_err)?;
+    
+    let emails: Vec<EmailSummary> = messages_vec.iter().filter_map(|m| {
         let uid = m.uid?;
         let envelope = m.envelope()?;
         let seen = m.flags().iter().any(|f| matches!(f, async_imap::types::Flag::Seen));
@@ -366,7 +373,8 @@ async fn run_idle(acc: &AccountConfig, account_name: &str, webhook_url: &str, we
     let idle = session.idle();
     let (idle_response, mut session) = idle
         .wait_with_timeout(std::time::Duration::from_secs(480))
-        .await?;
+        .await
+        .map_err(|e| anyhow::anyhow!("IDLE error: {}", e))?;
 
     if matches!(idle_response, IdleResponse::NewData(_)) {
         info!("New email on '{}', triggering webhook", account_name);
@@ -445,7 +453,10 @@ async fn search_emails(
         .await
         .map_err(imap_err)?;
 
-    let emails: Vec<EmailSummary> = messages.iter().filter_map(|m| {
+    // Convertir le stream en vector
+    let messages_vec: Vec<_> = messages.try_collect().await.map_err(imap_err)?;
+
+    let emails: Vec<EmailSummary> = messages_vec.iter().filter_map(|m| {
         let uid = m.uid?;
         let envelope = m.envelope()?;
         let seen = m.flags().iter().any(|f| matches!(f, async_imap::types::Flag::Seen));
