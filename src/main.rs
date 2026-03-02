@@ -370,8 +370,9 @@ async fn run_idle(acc: &AccountConfig, account_name: &str, webhook_url: &str, we
     let mut session = imap_session(acc).await?;
     session.select("INBOX").await?;
 
-    let idle = session.idle();
-    let (idle_response, mut session) = idle
+    let mut idle_handle = session.idle();
+    idle_handle.init().await.map_err(|e| anyhow::anyhow!("IDLE init error: {}", e))?;
+    let (idle_response, mut session) = idle_handle
         .wait_with_timeout(std::time::Duration::from_secs(480))
         .await
         .map_err(|e| anyhow::anyhow!("IDLE error: {}", e))?;
@@ -502,7 +503,7 @@ fn parse_imap_date(date: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("month out of range"))?;
     let month = months.get(month_idx).ok_or_else(|| anyhow::anyhow!("month out of range"))?;
 
-    Ok(format!("{}-{}-{}", parts[2].trim_start_matches('0').replace("", "").trim(), month, parts[0]))
+    let day = parts[2].trim_start_matches('0'); let day = if day.is_empty() { "0" } else { day }; Ok(format!("{}-{}-{}", day, month, parts[0]))
 }
 
 // ─── Error helpers ─────────────────────────────────────────────────────────
