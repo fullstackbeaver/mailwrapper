@@ -76,23 +76,33 @@ fn load_config() -> Result<Config> {
     let mut accounts: HashMap<String, AccountConfig> = HashMap::new();
 
     for (key, value) in std::env::vars() {
+        // Ignore les clés invalides (ex: commentaires "; ACCOUNT_..." copiés depuis un .env.sample)
+        if !key.chars().next().map(|c| c.is_ascii_alphabetic() || c == '_').unwrap_or(false) {
+            continue;
+        }
         if let Some(rest) = key.strip_prefix("ACCOUNT_") {
             if let Some(name) = rest.strip_suffix("_LOGIN") {
                 let name = name.to_lowercase();
                 let prefix = format!("ACCOUNT_{}", name.to_uppercase());
 
-                let imap_host = std::env::var(format!("{}_IMAP_HOST", prefix))
-                    .map_err(|_| anyhow::anyhow!("Missing {}_IMAP_HOST", prefix))?;
+                let imap_host = match std::env::var(format!("{}_IMAP_HOST", prefix)) {
+                    Ok(v) => v,
+                    Err(_) => { warn!("Skipping account '{}': missing {}_IMAP_HOST", name, prefix); continue; }
+                };
                 let imap_port: u16 = std::env::var(format!("{}_IMAP_PORT", prefix))
                     .unwrap_or_else(|_| "993".to_string())
                     .parse()?;
-                let smtp_host = std::env::var(format!("{}_SMTP_HOST", prefix))
-                    .map_err(|_| anyhow::anyhow!("Missing {}_SMTP_HOST", prefix))?;
+                let smtp_host = match std::env::var(format!("{}_SMTP_HOST", prefix)) {
+                    Ok(v) => v,
+                    Err(_) => { warn!("Skipping account '{}': missing {}_SMTP_HOST", name, prefix); continue; }
+                };
                 let smtp_port: u16 = std::env::var(format!("{}_SMTP_PORT", prefix))
                     .unwrap_or_else(|_| "587".to_string())
                     .parse()?;
-                let password = std::env::var(format!("{}_PASSWORD", prefix))
-                    .map_err(|_| anyhow::anyhow!("Missing {}_PASSWORD", prefix))?;
+                let password = match std::env::var(format!("{}_PASSWORD", prefix)) {
+                    Ok(v) => v,
+                    Err(_) => { warn!("Skipping account '{}': missing {}_PASSWORD", name, prefix); continue; }
+                };
 
                 info!("Loaded account '{}'", name);
                 accounts.insert(name, AccountConfig {
@@ -370,9 +380,8 @@ async fn run_idle(acc: &AccountConfig, account_name: &str, webhook_url: &str, we
     let mut session = imap_session(acc).await?;
     session.select("INBOX").await?;
 
-    let mut idle_handle = session.idle();
-    idle_handle.init().await.map_err(|e| anyhow::anyhow!("IDLE init error: {}", e))?;
-    let (idle_response, mut session) = idle_handle
+    let idle = session.idle();
+    let (idle_response, mut session) = idle
         .wait_with_timeout(std::time::Duration::from_secs(480))
         .await
         .map_err(|e| anyhow::anyhow!("IDLE error: {}", e))?;
@@ -503,7 +512,7 @@ fn parse_imap_date(date: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("month out of range"))?;
     let month = months.get(month_idx).ok_or_else(|| anyhow::anyhow!("month out of range"))?;
 
-    let day = parts[2].trim_start_matches('0'); let day = if day.is_empty() { "0" } else { day }; Ok(format!("{}-{}-{}", day, month, parts[0]))
+    Ok(format!("{}-{}-{}", parts[2].trim_start_matches('0').replace("", "").trim(), month, parts[0]))
 }
 
 // ─── Error helpers ─────────────────────────────────────────────────────────
