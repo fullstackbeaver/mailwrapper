@@ -50,7 +50,7 @@ struct AccountConfig {
 /// Charge la config depuis les variables d'environnement.
 ///
 /// Variables globales :
-///   API_PORT        (défaut: 8090)
+///   API_PORT        (défaut: 8025)
 ///   API_TOKEN       (obligatoire)
 ///   WEBHOOK_URL     (optionnel)
 ///
@@ -62,7 +62,7 @@ struct AccountConfig {
 /// Le nom du compte est déduit automatiquement en scannant les variables ACCOUNT_*_LOGIN.
 fn load_config() -> Result<Config> {
     let api_port: u16 = std::env::var("API_PORT")
-        .unwrap_or_else(|_| "8090".to_string())
+        .unwrap_or_else(|_| "8025".to_string())
         .parse()?;
 
     let api_token = std::env::var("API_TOKEN")
@@ -510,16 +510,24 @@ fn bad_request(msg: &str) -> (StatusCode, Json<Value>) {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
+    info!("Starting mailbridge application...");
 
+    info!("Loading configuration...");
     let config = load_config()?;
+    info!("Configuration loaded successfully");
+    
     let port = config.api.port;
     let cfg = Arc::new(config);
+    info!("API will listen on port: {}", port);
 
+    info!("Starting IDLE watchers...");
     {
         let cfg_idle = Arc::clone(&cfg);
         tokio::spawn(async move { start_idle_watchers(cfg_idle).await; });
     }
+    info!("IDLE watchers started");
 
+    info!("Setting up routes...");
     let protected = Router::new()
         .route("/accounts", get(list_accounts))
         .route("/accounts/:account/folders", get(list_folders))
@@ -535,12 +543,18 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
         .merge(protected);
+    info!("Routes configured");
 
     let addr = format!("0.0.0.0:{}", port);
+    info!("Binding to address: {}", addr);
     info!("mailbridge listening on {} ({} accounts)", addr, cfg.accounts.len());
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+    info!("TCP listener bound successfully");
+
+    info!("Starting server...");
     axum::serve(listener, app).await?;
+    info!("Server started successfully");
 
     Ok(())
 }
